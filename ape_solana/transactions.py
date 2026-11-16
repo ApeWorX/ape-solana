@@ -13,7 +13,7 @@ from solders.signature import Signature
 from solders.system_program import TransferParams, transfer
 from solders.transaction import Transaction
 
-from ape_solana._converters import SolanaAddress, to_pubkey
+from ape_solana._converters import to_pubkey
 from ape_solana.constants import LAMPORTS_PER_SOL
 
 if TYPE_CHECKING:
@@ -65,8 +65,6 @@ class SolanaTransaction(TransactionAPI):
     and an optional native SOL transfer of ``value`` lamports to ``receiver``.
     """
 
-    sender: SolanaAddress | None = Field(default=None, alias="from")  # type: ignore[assignment]
-    receiver: SolanaAddress | None = Field(default=None, alias="to")  # type: ignore[assignment]
     type: int = 0
     instructions: list[InstructionField] = Field(default_factory=list)
     recent_blockhash: str | None = None

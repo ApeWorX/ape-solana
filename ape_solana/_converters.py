@@ -1,8 +1,7 @@
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 from ape.api.convert import ConverterAPI
 from ape.types.address import AddressType
-from pydantic import BeforeValidator
 from solders.pubkey import Pubkey
 
 
@@ -32,13 +31,6 @@ def to_pubkey(address: Any) -> Pubkey:
         return Pubkey.from_string(address.address)
 
     return Pubkey.from_string(address)
-
-
-def validate_solana_address(value: Any) -> str:
-    return str(to_pubkey(value))
-
-
-SolanaAddress = Annotated[str, BeforeValidator(validate_solana_address)]
 
 
 class SolanaAddressConverter(ConverterAPI):
