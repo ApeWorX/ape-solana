@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=75.6.0", "wheel", "setuptools_scm[toml]>=5.0"]
+
+[tool.mypy]
+exclude = "build/"
+plugins = ["pydantic.mypy"]
+
+[tool.setuptools_scm]
+write_to = "ape_solana/version.py"
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312', 'py313']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+addopts = """
+    -p no:ape_test
+    --cov-branch
+    --cov-report term
+    --cov-report html
+    --cov-report xml
+    --cov=ape_solana
+"""
+python_files = "test_*.py"
+testpaths = "tests"
+
+[tool.isort]
+line_length = 100
+force_grid_wrap = 0
+include_trailing_comma = true
+multi_line_output = 3
+use_parentheses = true
+skip = ["version.py"]
+
+[tool.mdformat]
+number = true
