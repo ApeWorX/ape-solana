@@ -7,6 +7,7 @@ from ape.cli import ConnectedProviderCommand
 from ape.cli.arguments import existing_alias_argument, non_existing_alias_argument
 from ape.cli.options import account_option, ape_cli_context, network_option
 from ape.logging import HIDDEN_MESSAGE
+from solders.keypair import Keypair
 
 from ape_solana.constants import ECOSYSTEM_NAME, LAMPORTS_PER_SOL, SOLANA_DEFAULT_PATH
 
@@ -129,7 +130,7 @@ def import_account(cli_ctx, alias, use_mnemonic, keypair_file, hd_path):
 def export(cli_ctx, alias):
     account = cli_ctx.account_manager.load(alias)
     passphrase = click.prompt("Enter password to decrypt account", hide_input=True)
-    keypair = account.decrypt_keypair(passphrase)
+    keypair = Keypair.from_seed(account._decrypt_keyfile(passphrase))
     cli_ctx.logger.success(
         f"Account {account.address} secret key: {click.style(str(keypair), bold=True)}"
     )

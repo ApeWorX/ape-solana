@@ -62,7 +62,7 @@ setup(
     include_package_data=True,
     install_requires=[
         "click",  # Use same version as eth-ape
-        "eth-ape>=0.8.53,<0.9",
+        "eth-ape>=0.8.54,<0.9",
         "eth-account",  # Use same version as eth-ape
         "eth-keyfile",  # Use same version as eth-ape
         "requests",  # Use same version as eth-ape

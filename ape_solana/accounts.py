@@ -1,24 +1,17 @@
 import json
-from collections.abc import Iterator
 from functools import cached_property
-from os import environ
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import click
-from ape.api.accounts import AccountAPI
 from ape.exceptions import AccountsError, SignatureError
 from ape.logging import logger
 from ape.types.address import AddressType
-from ape.types.signatures import MessageSignature
+from ape.types.signatures import BaseSignature
 from ape.utils.basemodel import ManagerAccessMixin
-from ape.utils.misc import log_instead_of_fail
-from ape.utils.validators import _validate_account_alias, _validate_account_passphrase
-from ape_accounts.accounts import AccountContainer
+from ape_accounts.accounts import AccountContainer, BaseKeyfileAccount
 from eth_account.hdaccount import Language, generate_mnemonic, seed_from_mnemonic
-from eth_keyfile import create_keyfile_json, decode_keyfile_json
 from eth_pydantic_types import HexBytes
-from pydantic.dataclasses import dataclass
 from solders.keypair import Keypair
 from solders.message import to_bytes_versioned
 from solders.pubkey import Pubkey
@@ -33,69 +26,30 @@ if TYPE_CHECKING:
 
 SignableTransaction = SolanaTransaction | Transaction | VersionedTransaction
 
-
-class InvalidPasswordError(AccountsError):
-    def __init__(self):
-        super().__init__("Invalid password")
-
-
-@dataclass(frozen=True)
-class SolanaMessageSignature(MessageSignature):
-    """
-    An ed25519 signature in ape's ``MessageSignature`` shape, ``r`` and ``s`` being its halves.
-    """
-
-    @classmethod
-    def from_solders(cls, signature: Signature) -> "SolanaMessageSignature":
-        raw_signature = bytes(signature)
-        return cls(v=0, r=raw_signature[:32], s=raw_signature[32:])
-
-    def to_solders(self) -> Signature:
-        return Signature.from_bytes(bytes(self.r) + bytes(self.s))
-
-    def __str__(self) -> str:
-        return str(self.to_solders())
+BaseSignature.register(Signature)
 
 
 class SolanaAccountContainer(AccountContainer):
-    loaded_accounts: ClassVar[dict[str, "SolanaAccount"]] = {}  # type: ignore[assignment]
-
     @cached_property
     def data_folder(self) -> Path:
         path = self.config_manager.DATA_FOLDER / ECOSYSTEM_NAME / "accounts"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
-    def accounts(self) -> Iterator[AccountAPI]:
-        for keyfile in self._keyfiles:
-            if keyfile.stem not in self.loaded_accounts:
-                self.loaded_accounts[keyfile.stem] = SolanaAccount(keyfile_path=keyfile)
 
-            yield self.loaded_accounts[keyfile.stem]
-
-
-class SolanaAccount(AccountAPI):
+class SolanaAccount(BaseKeyfileAccount):
     """
     A Solana keypair stored in an encrypted keyfile.
     """
 
-    keyfile_path: Path
-    locked: bool = True
-    _autosign: bool = False
-    _cached_keypair: Keypair | None = None
+    passphrase_env_prefix = "APE_SOLANA_ACCOUNTS"
+    __autosign: bool = False
+    __cached_keypair: Keypair | None = None
 
-    @log_instead_of_fail(default="<SolanaAccount>")
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__} address={self.address} alias={self.alias}>"
-
-    @property
-    def alias(self) -> str:
-        return self.keyfile_path.stem
-
-    @property
-    def keyfile(self) -> dict:
-        return json.loads(self.keyfile_path.read_text())
+    @classmethod
+    def encrypt_secret(cls, secret: bytes, passphrase: str) -> dict:
+        address = str(Keypair.from_seed(secret).pubkey())
+        return {**super().encrypt_secret(secret, passphrase), "address": address}
 
     @property
     def address(self) -> AddressType:
@@ -110,63 +64,31 @@ class SolanaAccount(AccountAPI):
         return HexBytes(bytes(self.pubkey))
 
     @property
-    def _keypair(self) -> Keypair:
-        if self._cached_keypair is not None:
+    def __keypair(self) -> Keypair:
+        if self.__cached_keypair is not None:
             if not self.locked:
                 logger.warning("Using cached key for %s", self.alias)
-                return self._cached_keypair
+                return self.__cached_keypair
 
-            self._cached_keypair = None
+            self.__cached_keypair = None
 
         passphrase = self._prompt_for_passphrase(default="")
-        keypair = self.decrypt_keypair(passphrase)
+        keypair = Keypair.from_seed(self._decrypt_keyfile(passphrase))
         if click.confirm(f"Leave '{self.alias}' unlocked?"):
             self.locked = False
-            self._cached_keypair = keypair
+            self.__cached_keypair = keypair
 
         return keypair
 
     def unlock(self, passphrase: str | None = None):
-        keypair: Keypair | None = None
-        if passphrase:
-            keypair = self.decrypt_keypair(passphrase)
-
-        elif passphrase := environ.get(f"APE_SOLANA_ACCOUNTS_{self.alias}_PASSPHRASE"):
-            logger.info(f"Using passphrase for account '{self.alias}' from environment variable")
-            keypair = self.decrypt_keypair(passphrase)
-
-        attempts = 1
-        while keypair is None:
-            passphrase = self._prompt_for_passphrase(
-                f"Enter passphrase to permanently unlock '{self.alias}'"
-            )
-            try:
-                keypair = self.decrypt_keypair(passphrase)
-            except InvalidPasswordError as err:
-                if attempts >= 3:
-                    raise AccountsError(f"Failed to unlock after {attempts} attempts.") from err
-
-                logger.error("Invalid password")
-                attempts += 1
-
-        self._cached_keypair = keypair
+        self.__cached_keypair = Keypair.from_seed(self._request_secret(passphrase))
         self.locked = False
-
-    def lock(self):
-        self.locked = True
 
     def change_password(self):
         self.locked = True
-        keypair = self._keypair
+        keypair = self.__keypair
         passphrase = self._prompt_for_passphrase("Create new passphrase", confirmation_prompt=True)
-        write_keyfile(self.keyfile_path, keypair, passphrase)
-
-    def delete(self):
-        passphrase = self._prompt_for_passphrase(
-            f"Enter passphrase to delete '{self.alias}'", default=""
-        )
-        self.decrypt_keypair(passphrase)
-        self.keyfile_path.unlink()
+        self.write_keyfile(self.keyfile_path, keypair.secret(), passphrase)
 
     def set_autosign(self, enabled: bool, passphrase: str | None = None):
         """
@@ -180,12 +102,15 @@ class SolanaAccount(AccountAPI):
             self.unlock(passphrase=passphrase)
             logger.warning("Danger! This account will now sign any transaction it's given.")
 
-        self._autosign = enabled
+        self.__autosign = enabled
         if not enabled:
             self.locked = True
-            self._cached_keypair = None
+            self.__cached_keypair = None
 
-    def sign_message(self, msg: Any, **signer_options) -> SolanaMessageSignature | None:
+    # TODO: In ape 0.9, drop the `type: ignore` once `sign_message` returns `BaseSignature`.
+    def sign_message(  # type: ignore[override]
+        self, msg: Any, **signer_options
+    ) -> Signature | None:
         if isinstance(msg, str):
             display_msg = f"Signing raw string: '{msg}'"
             msg = msg.encode("utf8")
@@ -197,23 +122,23 @@ class SolanaAccount(AccountAPI):
             logger.warning("Unsupported message type, (type=%r, msg=%r)", type(msg), msg)
             return None
 
-        if not (self._autosign or click.confirm(f"{display_msg}\n\nSign: ")):
+        if not (self.__autosign or click.confirm(f"{display_msg}\n\nSign: ")):
             return None
 
-        return SolanaMessageSignature.from_solders(self._keypair.sign_message(msg))
+        return self.__keypair.sign_message(msg)
 
     def sign_transaction(  # type: ignore[override]
         self, txn: "TransactionAPI | SignableTransaction", **signer_options
     ) -> "TransactionAPI | SignableTransaction | None":
-        if not (self._autosign or click.confirm(f"{txn}\n\nSign: ")):
+        if not (self.__autosign or click.confirm(f"{txn}\n\nSign: ")):
             return None
 
-        return sign_transaction_with_keypair(self._keypair, txn)
+        return sign_transaction_with_keypair(self.__keypair, txn)
 
     def check_signature(  # type: ignore[override]
         self,
         data: "str | bytes | SignableTransaction",
-        signature: MessageSignature | Signature | bytes | None = None,
+        signature: BaseSignature | bytes | None = None,
         recover_using_eip191: bool = True,
     ) -> bool:
         if isinstance(data, SolanaTransaction):
@@ -231,7 +156,7 @@ class SolanaAccount(AccountAPI):
             raise AccountsError("Parameter 'signature' required when verifying a message.")
 
         message_bytes = data.encode("utf8") if isinstance(data, str) else data
-        return to_solders_signature(signature).verify(self.pubkey, message_bytes)
+        return Signature.from_bytes(bytes(signature)).verify(self.pubkey, message_bytes)
 
     def prepare_transaction(self, txn: "TransactionAPI", **kwargs) -> "TransactionAPI":
         sign = kwargs.pop("sign", False)
@@ -279,28 +204,6 @@ class SolanaAccount(AccountAPI):
         Fund this account on a test network, returning the airdrop transaction signature.
         """
         return self.provider.request_airdrop(self.address, lamports)  # type: ignore[attr-defined]
-
-    def _prompt_for_passphrase(self, message: str | None = None, **kwargs) -> str:
-        message = message or f"Enter passphrase to unlock '{self.alias}'"
-        return click.prompt(message, hide_input=True, **kwargs)
-
-    def decrypt_keypair(self, passphrase: str) -> Keypair:
-        try:
-            seed = decode_keyfile_json(self.keyfile, passphrase)
-        except ValueError as err:
-            raise InvalidPasswordError() from err
-
-        return Keypair.from_seed(seed)
-
-
-def to_solders_signature(signature: MessageSignature | Signature | bytes) -> Signature:
-    if isinstance(signature, Signature):
-        return signature
-
-    if isinstance(signature, bytes):
-        return Signature.from_bytes(signature)
-
-    return Signature.from_bytes(bytes(signature.r) + bytes(signature.s))
 
 
 def get_signed_message_bytes(transaction: Transaction | VersionedTransaction) -> bytes:
@@ -370,19 +273,9 @@ def create_keypair_from_bytes(secret: bytes) -> Keypair:
     raise AccountsError(f"Expected a 32 or 64 byte secret key, got {len(secret)} bytes.")
 
 
-def write_keyfile(path: Path, keypair: Keypair, passphrase: str):
-    keyfile = create_keyfile_json(keypair.secret(), passphrase, kdf="scrypt")
-    keyfile["address"] = str(keypair.pubkey())
-    path.write_text(json.dumps(keyfile), encoding="utf8")
-
-
 def _write_and_return_account(alias: str, passphrase: str, keypair: Keypair) -> SolanaAccount:
-    alias = _validate_account_alias(alias)
-    passphrase = _validate_account_passphrase(passphrase)
     container = ManagerAccessMixin.account_manager.containers[ECOSYSTEM_NAME]
-    path = container.data_folder.joinpath(f"{alias}.json")
-    write_keyfile(path, keypair, passphrase)
-    return SolanaAccount(keyfile_path=path)
+    return cast(SolanaAccount, container.create_account(alias, passphrase, keypair.secret()))
 
 
 def generate_account(

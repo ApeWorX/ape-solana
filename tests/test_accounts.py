@@ -1,11 +1,14 @@
 import pytest
+from ape.types.signatures import BaseSignature
+from ape_accounts.accounts import InvalidPasswordError
 from solders.hash import Hash
+from solders.keypair import Keypair
 from solders.message import MessageV0
 from solders.signature import Signature
 from solders.system_program import TransferParams, transfer
 from solders.transaction import Transaction, VersionedTransaction
 
-from ape_solana.accounts import InvalidPasswordError, import_account_from_mnemonic, load_keypair
+from ape_solana.accounts import import_account_from_mnemonic, load_keypair
 
 
 @pytest.mark.parametrize(
@@ -20,9 +23,9 @@ def test_import_account_from_mnemonic_matches_phantom(passphrase):
     account = import_account_from_mnemonic("phantom", passphrase, mnemonic)
 
     assert account.address == "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
-    assert account.decrypt_keypair(passphrase).pubkey() == account.pubkey
+    assert Keypair.from_seed(account._decrypt_keyfile(passphrase)).pubkey() == account.pubkey
     with pytest.raises(InvalidPasswordError):
-        account.decrypt_keypair("wrong-passphrase")
+        account._decrypt_keyfile("wrong-passphrase")
 
     account.keyfile_path.unlink()
 
@@ -31,8 +34,9 @@ def test_sign_message_round_trip(create_account):
     account = create_account()
     signature = account.sign_message("hello solana")
 
+    assert isinstance(signature, BaseSignature)
     assert account.check_signature("hello solana", signature)
-    assert account.check_signature(b"hello solana", signature.to_solders())
+    assert account.check_signature(b"hello solana", bytes(signature))
     assert not account.check_signature("hello ethereum", signature)
 
 
