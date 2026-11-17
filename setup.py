@@ -72,7 +72,7 @@ setup(
     python_requires=">=3.10,<4",
     extras_require=extras_require,
     py_modules=["ape_solana"],
-    license="Apache-2.0",
+    license="MIT",
     zip_safe=False,
     keywords="solana",
     packages=find_packages(exclude=["tests", "tests.*"]),
@@ -80,7 +80,7 @@ setup(
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: Apache Software License",
+        "License :: OSI Approved :: MIT License",
         "Natural Language :: English",
         "Operating System :: MacOS",
         "Operating System :: POSIX",
